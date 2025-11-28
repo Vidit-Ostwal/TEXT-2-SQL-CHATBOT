@@ -11,9 +11,6 @@ import re
 from csv_to_sqlite import load_csv_to_sqlite
 
 
-# --- Configuration ---
-# NOTE: The OpenAI client will automatically look for the OPENAI_API_KEY 
-# environment variable.
 try:
     client = OpenAI()
 except Exception as e:
@@ -21,82 +18,22 @@ except Exception as e:
     print("Please ensure OPENAI_API_KEY environment variable is set.")
 
 DB_FILE = "pharma_data.db"
-GPT_MODEL = "gpt-4o-mini" # Using gpt-4o-mini as the intended model
+GPT_MODEL = "gpt-4o-mini"
 
 load_csv_to_sqlite()
 
-# --- Retry Logic Configuration ---
 MAX_RETRIES = 5
 INITIAL_DELAY = 2  # Seconds
 RETRY_DELAY = lambda attempt: INITIAL_DELAY * (2 ** attempt) # Exponential backoff
 
-# --- Pydantic Models for FastAPI ---
+
 class QueryRequest(BaseModel):
     """Model for the incoming user query."""
     user_question: str
 
-class QueryResponse(BaseModel):
-    """Model for the final response."""
-    status: str
-    final_answer: str
-    generated_sql: str
-    sql_result: str
-    model_used: str
-
-
-# --- LLM Helper: Detailed Prompt Context ---
-
-def get_db_schema_and_relationships():
-    """
-    Returns the detailed schema and relationship text for the LLM prompt.
-    """
-    return SYSTEM_PROMPT
-    schema = """
-    CREATE TABLE territory_dim (territory_id INTEGER, name TEXT, geo_type TEXT, parent_territory_id INTEGER);
-    CREATE TABLE rep_dim (rep_id INTEGER, first_name TEXT, last_name TEXT, region TEXT);
-    CREATE TABLE fact_rx (hcp_id INTEGER, date_id INTEGER, brand_code TEXT, trx_cnt INTEGER, nrx_cnt INTEGER);
-    CREATE TABLE fact_payor_mix (account_id INTEGER, date_id INTEGER, payor_type TEXT, pct_of_volume REAL);
-    CREATE TABLE date_dim (date_id INTEGER, calendar_date TEXT, year INTEGER, quarter TEXT, week_num INTEGER, day_of_week TEXT);
-    CREATE TABLE fact_ln_metrics (entity_type TEXT, entity_id INTEGER, quarter_id TEXT, ln_patient_cnt INTEGER, est_market_share REAL);
-    CREATE TABLE fact_rep_activity (activity_id INTEGER, rep_id INTEGER, hcp_id INTEGER, account_id INTEGER, date_id INTEGER, activity_type TEXT, status TEXT, time_of_day TEXT, duration_min REAL);
-    CREATE TABLE account_dim (account_id INTEGER, name TEXT, account_type TEXT, address TEXT, territory_id INTEGER);
-    CREATE TABLE hcp_dim (hcp_id INTEGER, full_name TEXT, specialty TEXT, tier TEXT, territory_id INTEGER);
-
-    -- Explicit Foreign Key Relationships (CRITICAL FOR JOINS):
-    -- 1. Date Joins: fact_rx.date_id <-> date_dim.date_id, fact_payor_mix.date_id <-> date_dim.date_id, fact_rep_activity.date_id <-> date_dim.date_id
-    -- 2. Territory Joins: hcp_dim.territory_id <-> territory_dim.territory_id, account_dim.territory_id <-> territory_dim.territory_id
-    -- 3. Rep/Territory: rep_dim.region <-> territory_dim.name (name-based join for territory)
-    -- 4. HCP/Account Joins: fact_rx.hcp_id <-> hcp_dim.hcp_id, fact_rep_activity.hcp_id <-> hcp_dim.hcp_id/account_dim.account_id
-    -- 5. Longitudinal Metrics: fact_ln_metrics.entity_id joins to hcp_dim.hcp_id when entity_type = 'H'.
-    """
-    return schema
-
 
 def build_sql_prompt(user_question: str) -> str:
     """Builds the full prompt used to generate the SQL query."""
-    schema = get_db_schema_and_relationships()
-    # return f"""
-    # -- ROLE: Data Analyst SQL Expert
-    # -- TASK: You are a highly accurate SQLite database expert. Your sole function is to translate a user's natural language question into a single, valid, and executable SQLite query. 
-    # -- You MUST only output the raw SQL query. DO NOT include any explanatory text, conversational filler, or markdown formatting (e.g., no ```sql...```).
-
-    # -- DATABASE CONTEXT:
-    # -- The database is named 'pharma_data.db' and uses the SQLite dialect.
-
-    # -- SCHEMA DEFINITION:
-    # {schema}
-
-    # -- INSTRUCTIONS & RULES:
-    # -- 1. **SQL DIALECT:** Use standard SQLite syntax.
-    # -- 2. **Aliasing:** Always use table aliases (e.g., T1, T2) for readability.
-    # -- 3. **Aggregation:** Use appropriate aggregate functions (SUM, AVG, COUNT) and GROUP BY clauses when needed.
-    # -- 4. **HCP/Account Names:** Names are typically full strings. Use LIKE '%%' or '=' as appropriate.
-    # -- 5. **Date Filtering:** Use the appropriate columns in the `date_dim` table for filtering by year, quarter, etc.
-
-    # -- USER QUESTION START:
-    # {user_question}
-    # -- USER QUESTION END
-    # """
 
     return f"""
     -- ROLE: Data Analyst SQL Expert
@@ -104,7 +41,7 @@ def build_sql_prompt(user_question: str) -> str:
 
     -- OUTPUT FORMAT (required, exact):
     -- 1) A short, high-level, non-sensitive explanation enclosed in <explanation>...</explanation>.
-    --    - This should be a concise rationale (2–3 short bullet points or <= 40 words) describing the approach and any key assumptions (do NOT reveal internal chain-of-thought or step-by-step hidden reasoning).
+    --    - This should be a concise rationale describing the approach and any key assumptions (reveal internal chain-of-thought or step-by-step hidden reasoning).
     -- 2) The final SQL enclosed in <sql>...</sql>.
     --    - The <sql> section must contain only the single, executable SQLite query (no surrounding backticks, no commentary).
     -- Example correct output:
@@ -115,7 +52,7 @@ def build_sql_prompt(user_question: str) -> str:
     -- The database is named 'pharma_data.db' and uses the SQLite dialect.
 
     -- SCHEMA DEFINITION:
-    {schema}
+    {SYSTEM_PROMPT}
 
     -- INSTRUCTIONS & RULES:
     -- 1. **SQL DIALECT:** Use standard SQLite syntax.
@@ -146,20 +83,18 @@ def parse_response(text: str):
     }
 
 
-def generate_sql_query(user_question: str) -> str:
+def generate_sql_query(messages: list = []) -> str:
     """Generates a SQL query from the user question using the LLM with retry logic."""
-    prompt = build_sql_prompt(user_question)
     
     for attempt in range(MAX_RETRIES):
         try:
             response = client.chat.completions.create(
                 model=GPT_MODEL,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
+                messages=messages,
                 temperature=0.0
             )
             # The LLM is instructed to only output the SQL query
+            print(response)
             response = response.choices[0].message.content.strip()
             parsed = parse_response(response)
             return parsed
@@ -246,37 +181,39 @@ def process_query(user_question: str) -> dict:
     """
     Processes a natural language query, generates SQL, executes it, and provides a final answer.
     """
+    messages = []
     user_question = user_question.strip()
-    
-    # 1. Generate SQL Query (with Retries)
-    generated_sql = generate_sql_query(user_question)
-    
-    # 2. Execute SQL Query
-    sql_result = execute_sql(generated_sql.get('sql'))
+    prompt = build_sql_prompt(user_question)
+    messages.append({"role": "user", "content": prompt})
 
-    # 3. Handle SQL Errors or Success
-    if sql_result.startswith("SQL_ERROR") or sql_result.startswith("GENERAL_ERROR"):
-        # The prompt is designed to self-correct, but for a fast prototype, we halt here.
-        # In a production system, you would feed this error back to the LLM for correction.
-        error_message = f"SQL generation was successful, but execution failed. The error was: {sql_result.split(': ', 1)[1]}"
-        return {
-            "status": "error",
-            "final_answer": error_message,
-            "generated_sql": generated_sql['sql'],
-            "sql_result": sql_result,
-            "model_used": GPT_MODEL,
-            "explanation": generated_sql['explanation']
+    error_message = None
+    for attempt in range(MAX_RETRIES):
+        generated_response = generate_sql_query(messages)
 
-        }
+        sql_query = generated_response.get('sql')
+        explanation = generated_response.get('explanation')
 
-    # 4. Generate Final Answer
-    final_answer = generate_final_answer(user_question, generated_sql, sql_result)
+        sql_result = execute_sql(sql_query)
+
+        if sql_result.startswith("SQL_ERROR") or sql_result.startswith("GENERAL_ERROR"):
+            error_message = f"SQL generation was successful, but execution failed. The error was: {sql_result.split(': ', 1)[1]}"
+        
+        elif sql_result.startswith("[]"):
+            error_message = "No data found for the given query, try another query"
+
+        else:
+            break
+
+        messages.append({"role": "assistant", "content": generated_response})
+        messages.append({"role": "user", "content": error_message})
+
+    final_answer = generate_final_answer(user_question, sql_query, sql_result)
     
     return {
         "status": "success",
         "final_answer": final_answer,
-        "generated_sql": generated_sql['sql'],
+        "generated_sql": sql_query,
         "sql_result": sql_result,
         "model_used": GPT_MODEL,
-        "explanation": generated_sql['explanation']
+        "explanation": explanation
     }

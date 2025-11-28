@@ -12,3 +12,4 @@ wheels/
 .python-version
 .DS_Store
 d.ipynb
+pharma_data.db

@@ -34,7 +34,7 @@ This project uses `uv` for fast Python package management.
     curl -LsSf https://astral.sh/uv/install.sh | sh
     ```
 
-2.  **Clone the repository** (if applicable) and navigate to the project directory.
+2.  **Clone the repository** Navigate to the project directory.
 
 3.  **Sync dependencies**:
     This command will create a virtual environment and install all dependencies defined in `pyproject.toml`.

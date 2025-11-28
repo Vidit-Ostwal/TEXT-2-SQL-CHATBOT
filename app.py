@@ -47,7 +47,7 @@ def call_backend(question: str):
 
 
 with gr.Blocks(title="Pharma Data QA — Gradio UI") as demo:
-    gr.Markdown("### Minimal Gradio UI (calls FastAPI backend)")
+    gr.Markdown("### Pharma Data QA Interface")
 
     with gr.Column():
         gr.Markdown("**Question**")

@@ -93,8 +93,6 @@ def generate_sql_query(messages: list = []) -> str:
                 messages=messages,
                 temperature=0.0
             )
-            # The LLM is instructed to only output the SQL query
-            print(response)
             response = response.choices[0].message.content.strip()
             parsed = parse_response(response)
             return parsed

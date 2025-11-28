@@ -49,10 +49,16 @@ def call_backend(question: str):
 with gr.Blocks(title="Pharma Data QA — Gradio UI") as demo:
     gr.Markdown("### Minimal Gradio UI (calls FastAPI backend)")
 
-    # Input area (top)
-    with gr.Row():
-        inp = gr.Textbox(label="Question", placeholder="e.g. Top 5 drugs by prescriptions in 2024")
-        run = gr.Button("Run")
+    with gr.Column():
+        gr.Markdown("**Question**")
+        with gr.Row():
+            inp = gr.Textbox(
+                show_label=False,
+                placeholder="e.g. Which territory has the highest prescription volume this quarter?",
+                scale=4
+            )
+            run = gr.Button("Run", variant="primary", scale=1)
+
 
     # Large boxes for Generated SQL and Final Answer (prominent)
     with gr.Row():
@@ -61,7 +67,7 @@ with gr.Blocks(title="Pharma Data QA — Gradio UI") as demo:
 
     # Data table showing SQL results (kept under the big boxes)
     result_table = gr.Dataframe(label="SQL result (table)")
-    explanation_box = gr.Textbox(label="Explanation", lines=10, interactive=False)
+    explanation_box = gr.Textbox(label="Explanation", lines=2, interactive=False)
 
     # Bottom-most row: model used, status, and download
     with gr.Row():

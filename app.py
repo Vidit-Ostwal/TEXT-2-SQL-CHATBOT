@@ -1,9 +1,6 @@
 # gradio_ui.py
 import gradio as gr
-import requests
 import pandas as pd
-import io
-import tempfile
 from backend_app import process_query
 
 def call_backend(question: str):

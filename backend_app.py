@@ -1,11 +1,7 @@
-import os
-import time
 import json
 import sqlite3
-import pandas as pd
-from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from openai import OpenAI, APIError
+from openai import OpenAI
 from system_prompt import SYSTEM_PROMPT 
 import re
 from csv_to_sqlite import load_csv_to_sqlite
@@ -23,9 +19,6 @@ GPT_MODEL = "gpt-4o-mini"
 load_csv_to_sqlite()
 
 MAX_RETRIES = 5
-INITIAL_DELAY = 2  # Seconds
-RETRY_DELAY = lambda attempt: INITIAL_DELAY * (2 ** attempt) # Exponential backoff
-
 
 class QueryRequest(BaseModel):
     """Model for the incoming user query."""
@@ -83,10 +76,10 @@ def parse_response(text: str):
     }
 
 
-def generate_sql_query(messages: list = []) -> str:
+def generate_sql_query(messages: list = [], max_retry: int = 3) -> dict | None:
     """Generates a SQL query from the user question using the LLM with retry logic."""
-    
-    for attempt in range(MAX_RETRIES):
+    retry_count = 0
+    while retry_count < max_retry:
         try:
             response = client.chat.completions.create(
                 model=GPT_MODEL,
@@ -96,19 +89,11 @@ def generate_sql_query(messages: list = []) -> str:
             response = response.choices[0].message.content.strip()
             parsed = parse_response(response)
             return parsed
-            
-        except APIError as e:
-            if attempt < MAX_RETRIES - 1:
-                delay = RETRY_DELAY(attempt)
-                print(f"OpenAI API Error (Attempt {attempt + 1}/{MAX_RETRIES}): {e}. Retrying in {delay:.2f}s...")
-                time.sleep(delay)
-            else:
-                raise HTTPException(status_code=500, detail=f"OpenAI API failed after {MAX_RETRIES} attempts: {e}")
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"An unexpected error occurred during SQL generation: {e}")
-            
-    # Should not be reached, but needed for type completeness
-    raise HTTPException(status_code=500, detail="Failed to generate SQL query after all retries.")
+        except Exception:
+            retry_count += 1
+    
+    print(f"Failed to generate valid SQL after {max_retry} retries.")
+    return {}
 
 
 def generate_final_answer(question: str, sql_query: str, sql_result: str) -> str:
@@ -184,26 +169,51 @@ def process_query(user_question: str) -> dict:
     prompt = build_sql_prompt(user_question)
     messages.append({"role": "user", "content": prompt})
 
-    error_message = None
+    final_answer = ""
+    sql_query = ""
+    sql_result = ""
+    explanation = ""
+
+
     for attempt in range(MAX_RETRIES):
+        print(f"Attempt {attempt + 1} of {MAX_RETRIES} to generate valid SQL query...")
         generated_response = generate_sql_query(messages)
 
         sql_query = generated_response.get('sql')
         explanation = generated_response.get('explanation')
+        sql_query = None   
+        error_message = None
 
-        sql_result = execute_sql(sql_query)
-
-        if sql_result.startswith("SQL_ERROR") or sql_result.startswith("GENERAL_ERROR"):
-            error_message = f"SQL generation was successful, but execution failed. The error was: {sql_result.split(': ', 1)[1]}"
-        
-        elif sql_result.startswith("[]"):
-            error_message = "No data found for the given query, try another query"
-
+        if sql_query is None:
+            error_message = "Failed to generate valid SQL query."
         else:
-            break
+            sql_result = execute_sql(sql_query)
+            if sql_result.startswith("SQL_ERROR") or sql_result.startswith("GENERAL_ERROR"):
+                error_message = f"SQL generation was successful, but execution failed. The error was: {sql_result.split(': ', 1)[1]}"
+            elif sql_result == "[]": # Check for exact empty array string
+                error_message = "No data found for the given query, try another query."
+            else:
+                # If no error and data found, break the retry loop
+                break
+        
+        # If an error occurred, append messages for retry and continue loop
+        if error_message:
+            messages.append({"role": "assistant", "content": generated_response})
+            messages.append({"role": "user", "content": f"The previous attempt resulted in an error: {error_message}. Please try again."})
+            print(f"Error encountered: {error_message}. Retrying...")
+            continue
 
-        messages.append({"role": "assistant", "content": generated_response})
-        messages.append({"role": "user", "content": error_message})
+    if sql_query is None or error_message:
+        # If loop finished without success due to persistent errors or max retries
+        final_answer = "I was unable to generate a valid SQL query or execute it successfully. Please try rephrasing your question."
+        return {
+            "status": "failure",
+            "final_answer": final_answer,
+            "generated_sql": sql_query if sql_query else "N/A",
+            "sql_result": sql_result if sql_result else "N/A",
+            "model_used": GPT_MODEL,
+            "explanation": explanation if explanation else "N/A"
+        }
 
     final_answer = generate_final_answer(user_question, sql_query, sql_result)
     

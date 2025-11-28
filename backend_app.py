@@ -181,7 +181,6 @@ def process_query(user_question: str) -> dict:
 
         sql_query = generated_response.get('sql')
         explanation = generated_response.get('explanation')
-        sql_query = None   
         error_message = None
 
         if sql_query is None:

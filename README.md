@@ -42,6 +42,11 @@ This project uses `uv` for fast Python package management.
     uv sync
     ```
 
+4. **Set up environment variables**:
+    ```bash
+    export OPENAI_API_KEY="your_openai_api_key_here"
+    ```
+
 ### Running the Application
 
 To run the Gradio application:
